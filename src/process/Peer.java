@@ -5,6 +5,7 @@ import java.net.ServerSocket;
 import java.net.Socket;
 import java.net.UnknownHostException;
 import java.nio.CharBuffer;
+import java.util.ArrayList;
 import java.util.List;
 /*
     messages
@@ -54,6 +55,13 @@ public class Peer {
         String ret = "";
         for (int port: peers) {
             ret += port + " ";
+        }
+        return ret;
+    }
+    List<Integer> decodePeers(String s){
+        List<Integer> ret = new ArrayList<>();
+        for(String num : s.split(" ")){
+            ret.add(Integer.parseInt(num));
         }
         return ret;
     }
