@@ -10,12 +10,12 @@ import java.util.function.ToDoubleBiFunction;
 /*
     messages                response
     0 - hey                 4 list or no answer
-    1 - coordinator alive   3 ok
+    1 - coordinator alive   3 ok - add time to last time and compare
     2 - election            3 ok or 2 election
     resonses codes
     3 - ok, i received      no response
     4 - list of hosts is coming
-
+    5 - new peer            3 ok and add peer to list
 
  */
 public class Peer {
@@ -25,21 +25,11 @@ public class Peer {
 //    private ServerSocket serverSocket = null;
     List<Integer> peers = new ArrayList<>();
     boolean active = true ;
-    Socket makeConnection(Peer peer){
-        try {
-            return new Socket(peer.getHost(), peer.getPort());
-        } catch (IOException e) {
-            e.printStackTrace();
-        }
-        return null;
-    }
-    boolean send(Peer peer , String message){
-        return send(peer , message , defaultTimeOut);
-    }
-    boolean sendAndGetRespone(Peer peer , String message , int timeOut){
+
+    boolean sendAndGetRespone(int port , String message , int timeOut){
         try{
-            Socket s=new Socket(peer.getHost(),peer.getPort());
-            System.out.println("sending to "+ peer.getPort());
+            Socket s=new Socket(this.getHost(),port);
+            System.out.println("sending to "+ port);
             s.setSoTimeout(timeOut);
             DataOutputStream dout=new DataOutputStream(s.getOutputStream());
             DataInputStream din = new DataInputStream(s.getInputStream());
@@ -65,6 +55,7 @@ public class Peer {
     }
     void decodeResponse(String response ){
         char c = response.charAt(0);
+        ///sent msg and got this as response
         ///receive c as response
         switch (c){
             case '4':
@@ -80,40 +71,24 @@ public class Peer {
                 break;
         }
     }
-    String encodeResponse(char c){
-        ///
+    String encodeResponse(String response){
+        /// received this msg and encode a proper response and handle actions
+        char c = response.charAt(0);
         switch (c){
             case '0': /// if we receive 1
                 /// if we received new peer we send list of other peers
                 /// adding coordinator port and other ports including last which is the port the receiver will be listening to
                 this.addNewPeer();
+                this.notifyWithNewPeer();
                 return new String("4 " + this.getPort()+" "+ encodePeers());
+
+            ///case '5' we received new peer respond with okay
+            case '5':
+                notifiedWithNewPeer(response);
+                return new String("3 okay");
             default:
                 return new String("3 okay");
-//                System.out.println("we can't find a suitable response");
-//                return null;
         }
-    }
-
-    // TODO: 11/30/2020 remove
-    boolean send(Peer peer, String message, int timeOut )  {
-        try{
-            Socket s=new Socket(peer.getHost(),peer.getPort());
-            s.setSoTimeout(timeOut);
-            DataOutputStream dout=new DataOutputStream(s.getOutputStream());
-            dout.writeUTF(message);
-            dout.flush();
-            dout.close();
-            s.close();
-            return true;
-        }catch(Exception e){System.out.println(e);}
-        return false;
-    }
-
-    // TODO: 11/30/2020 remove
-    String receive(){
-        ///utility function
-        return receive(defaultTimeOut);
     }
     String encodePeers(){
         String ret = "";
@@ -141,7 +116,22 @@ public class Peer {
             this.peers.add(last+ 1);
         }
     }
+    void notifyWithNewPeer(){
+        /// used in coordinator
+        /// don't notify last one he already got response
+        /// last in list is the new peer
+        for (int i = 0; i < peers.size()-1 ; i++) {
+            sendAndGetRespone(peers.get(i) ,"5 "+ peers.get(peers.size() -1 ),1000);
+        }
 
+    }
+    void notifiedWithNewPeer(String response){
+        response = response.substring(2);
+        int newPeer =Integer.parseInt( response) ;
+        this.peers.add(newPeer);
+        printPeers();
+        return ;
+    }
     boolean receiveAndGiveResponse(int timeOut){
         try{
             ServerSocket ss=new ServerSocket(this.getPort());
@@ -153,7 +143,7 @@ public class Peer {
             String str=din.readUTF();
             System.out.println("message :  "+str);
             // TODO: 11/30/2020  handle the cases when str is null
-            dout.writeUTF(encodeResponse(str.charAt(0)));
+            dout.writeUTF(encodeResponse(str));
             dout.flush();
             dout.close();
             din.close();
@@ -161,21 +151,6 @@ public class Peer {
             return true;
         }catch(Exception e){System.out.println(e);}
         return false;
-    }
-    String receive(int timeOut) {
-        ///todo remove
-        try{
-            ServerSocket ss=new ServerSocket(this.getPort());
-            if(timeOut> 0)
-                ss.setSoTimeout(timeOut);
-            Socket s=ss.accept();//establishes connection
-            DataInputStream dis=new DataInputStream(s.getInputStream());
-            String str=(String)dis.readUTF();
-            System.out.println("message= "+str);
-            ss.close();
-            return str;
-        }catch(Exception e){System.out.println(e);}
-        return null;
     }
 
     void BullyAlgorithm(){
@@ -199,7 +174,7 @@ public class Peer {
     }
     boolean sendHeyToCoordinator(){
         /// we create a peer here because the default settings is it of coordinator
-        return sendAndGetRespone(new Peer(),"0 hey",1000);
+        return sendAndGetRespone(8090,"0 hey",1000);
     }
     public void setHost(String host) {
         this.host = host;
@@ -223,5 +198,13 @@ public class Peer {
 
     public void setPeers(List<Integer> peers) {
         this.peers = peers;
+    }
+    void printPeers(){
+        // TODO: 12/1/2020 remove
+        for (int port: peers) {
+            System.out.print(port + " ");
+        }
+        System.out.println("");
+
     }
 }
