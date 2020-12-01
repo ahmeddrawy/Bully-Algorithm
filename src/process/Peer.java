@@ -3,16 +3,17 @@ package process;
 import java.io.*;
 import java.net.ServerSocket;
 import java.net.Socket;
-import java.net.UnknownHostException;
-import java.nio.CharBuffer;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.function.ToDoubleBiFunction;
+
 /*
-    messages
-    0 - hey
-    1 - coordinator alive
-    2 - election
-    3 - ok, i received
+    messages                response
+    0 - hey                 4 list or no answer
+    1 - coordinator alive   3 ok
+    2 - election            3 ok or 2 election
+    resonses codes
+    3 - ok, i received      no response
     4 - list of hosts is coming
 
 
@@ -22,7 +23,7 @@ public class Peer {
     private String host = "127.0.0.1"; /// default, all on local host
     private int defaultTimeOut = 1000;
 //    private ServerSocket serverSocket = null;
-    List<Integer> peers = null;
+    List<Integer> peers = new ArrayList<>();
     boolean active = true ;
     Socket makeConnection(Peer peer){
         try {
@@ -35,6 +36,66 @@ public class Peer {
     boolean send(Peer peer , String message){
         return send(peer , message , defaultTimeOut);
     }
+    boolean sendAndGetRespone(Peer peer , String message , int timeOut){
+        try{
+            Socket s=new Socket(peer.getHost(),peer.getPort());
+            System.out.println("sending to "+ peer.getPort());
+            s.setSoTimeout(timeOut);
+            DataOutputStream dout=new DataOutputStream(s.getOutputStream());
+            DataInputStream din = new DataInputStream(s.getInputStream());
+            dout.writeUTF(message);
+            String response = din.readUTF();
+            System.out.println("we got response "+ response);
+            decodeResponse(response);
+            dout.flush();
+            dout.close();
+            s.close();
+            return true;
+        }catch(Exception e){System.out.println(e);}
+        return false;
+
+    }
+    void receivedListOfPeers(String response){
+        List<Integer> l  =  decodePeers(response.substring(2)); /// remove first char
+        this.setPort(l.get(l.size() -1)); //setting my port as last in list
+        l.remove(l.size()- 1);///remove myself
+        this.setPeers(l);
+        return ;
+
+    }
+    void decodeResponse(String response ){
+        char c = response.charAt(0);
+        ///receive c as response
+        switch (c){
+            case '4':
+                System.out.println("received list of peers");
+                receivedListOfPeers(response);
+                break;
+            case '3':
+                /// received ok
+                System.out.println("received okay");
+                break;
+            default:
+                System.out.println("we cannot resolve this response");
+                break;
+        }
+    }
+    String encodeResponse(char c){
+        ///
+        switch (c){
+            case '0': /// if we receive 1
+                /// if we received new peer we send list of other peers
+                /// adding coordinator port and other ports including last which is the port the receiver will be listening to
+                this.addNewPeer();
+                return new String("4 " + this.getPort()+" "+ encodePeers());
+            default:
+                return new String("3 okay");
+//                System.out.println("we can't find a suitable response");
+//                return null;
+        }
+    }
+
+    // TODO: 11/30/2020 remove
     boolean send(Peer peer, String message, int timeOut )  {
         try{
             Socket s=new Socket(peer.getHost(),peer.getPort());
@@ -48,7 +109,10 @@ public class Peer {
         }catch(Exception e){System.out.println(e);}
         return false;
     }
+
+    // TODO: 11/30/2020 remove
     String receive(){
+        ///utility function
         return receive(defaultTimeOut);
     }
     String encodePeers(){
@@ -65,34 +129,41 @@ public class Peer {
         }
         return ret;
     }
-    String getRespone(char c){
-        switch (c){
-            case '0':
-                /// if we received new peer we send list of other peers
-                    return new String("4 " + encodePeers());
-            default:
-                System.out.println("we can't find a suitable response");
-                return null;
+    void addNewPeer(){
+        /// this called in coordinator only
+        if(this.peers.size() ==0 ){
+            int last = 8090;
+            this.peers.add(last + 1) ;
+        }
+        else {
+            int sz = this.peers.size();
+            int last = this.peers.get(sz -1);
+            this.peers.add(last+ 1);
         }
     }
 
-    void respond(int timeOut){
+    boolean receiveAndGiveResponse(int timeOut){
         try{
             ServerSocket ss=new ServerSocket(this.getPort());
             if(timeOut> 0)
                 ss.setSoTimeout(timeOut);
             Socket s=ss.accept();//establishes connection
-            DataInputStream dis=new DataInputStream(s.getInputStream());
+            DataInputStream din=new DataInputStream(s.getInputStream());
             DataOutputStream dout=new DataOutputStream(s.getOutputStream());
-            String str=(String)dis.readUTF();
+            String str=din.readUTF();
             System.out.println("message :  "+str);
-
+            // TODO: 11/30/2020  handle the cases when str is null
+            dout.writeUTF(encodeResponse(str.charAt(0)));
+            dout.flush();
+            dout.close();
+            din.close();
             ss.close();
-            return ;
+            return true;
         }catch(Exception e){System.out.println(e);}
-        return ;
+        return false;
     }
     String receive(int timeOut) {
+        ///todo remove
         try{
             ServerSocket ss=new ServerSocket(this.getPort());
             if(timeOut> 0)
@@ -109,14 +180,10 @@ public class Peer {
 
     void BullyAlgorithm(){
         if(sendHeyToCoordinator()){
-            String response = receive();
-            if(response!= null){
-                System.out.println(response);
-            }
-            else {
-                // we didn't receive
-                System.out.println("we didn't receive");
-            }
+            /// if we can ping coordinator now we know our port and listening to it
+            /// and know other processes
+            Listen();/// we listen to our port
+            // TODO: 11/30/2020 decide when to consider coordinator down
         }else {
             System.out.println("cannot connect to coordinator");
             /// i'm coordinator rn and ill add myself to list
@@ -126,27 +193,14 @@ public class Peer {
     void Listen(){
         System.out.println("I'm listening to " + this.getPort());
         while(active){
-           String response =  receive(0); /// wait indefinitly
-            switch (response.charAt(0)){
-                case '0':
-                        /// hey case we add the new peer to our list and send him port to listen to
-                    break;
-                case '1':
+           receiveAndGiveResponse(0); /// wait indefinitely
 
-                    break;
-                case '2':
-
-                    break;
-            }
         }
     }
     boolean sendHeyToCoordinator(){
-        return send(new Peer(),"0 hey");
+        /// we create a peer here because the default settings is it of coordinator
+        return sendAndGetRespone(new Peer(),"0 hey",1000);
     }
-    void print(String msg){
-        System.out.println(msg);
-    }
-
     public void setHost(String host) {
         this.host = host;
     }
@@ -161,5 +215,13 @@ public class Peer {
 
     public String getHost() {
         return host;
+    }
+
+    public List<Integer> getPeers() {
+        return peers;
+    }
+
+    public void setPeers(List<Integer> peers) {
+        this.peers = peers;
     }
 }
