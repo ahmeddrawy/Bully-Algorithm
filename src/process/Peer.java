@@ -3,11 +3,13 @@ package process;
 import java.io.*;
 import java.net.ServerSocket;
 import java.net.Socket;
+import java.sql.Timestamp;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.function.ToDoubleBiFunction;
-
 /*
+
+    <timestamp,sender,message>
     messages                response
     0 - hey                 4 list or no answer
     1 - coordinator alive   3 ok - add time to last time and compare
@@ -19,12 +21,17 @@ import java.util.function.ToDoubleBiFunction;
 
  */
 public class Peer {
+    final int COORDINATOR_DEFAULT =8090;
+    final int MAX_LIFE = 5000 ; /// in milliseconds
+    final int NO_RESPONSE_SPAN = 3000 ; /// in milliseconds, received any message in 3 seconds, alive or election
     private int port = 8090;
     private String host = "127.0.0.1"; /// default, all on local host
     private int defaultTimeOut = 1000;
 //    private ServerSocket serverSocket = null;
     List<Integer> peers = new ArrayList<>();
-    boolean active = true ;
+    private boolean active = true ;
+    private boolean AMA_COORDINATOR = false ;
+    long AliveTimeStamp = 0;
 
     boolean sendAndGetRespone(int port , String message , int timeOut){
         try{
@@ -34,7 +41,7 @@ public class Peer {
             DataOutputStream dout=new DataOutputStream(s.getOutputStream());
             DataInputStream din = new DataInputStream(s.getInputStream());
             dout.writeUTF(message);
-            String response = din.readUTF();
+            String response = din.readUTF(); /// we need to decode response
             System.out.println("we got response "+ response);
             decodeResponse(response);
             dout.flush();
@@ -53,14 +60,27 @@ public class Peer {
         return ;
 
     }
+    void checkTimeStampAndSender(long timestamp , int sender){
+        /// if sender is coordinator port 8090
+        // we update the Alive Timestamp
+
+        if(sender == COORDINATOR_DEFAULT){
+            setAliveTimeStamp(timestamp);
+        }
+
+    }
     void decodeResponse(String response ){
-        char c = response.charAt(0);
+        String msg=  getMessageFromResponse(response);
+        int sender = getSenderPortFromResponse(response);
+        long timestamp = getTimeStampFromRepsonse(response);
+        char c = msg.charAt(0);
+        checkTimeStampAndSender(timestamp , sender);
         ///sent msg and got this as response
         ///receive c as response
         switch (c){
             case '4':
                 System.out.println("received list of peers");
-                receivedListOfPeers(response);
+                receivedListOfPeers(msg);
                 break;
             case '3':
                 /// received ok
@@ -72,22 +92,40 @@ public class Peer {
         }
     }
     String encodeResponse(String response){
+        String msg=  getMessageFromResponse(response);
+        int sender = getSenderPortFromResponse(response);
+        long timestamp = getTimeStampFromRepsonse(response);
+        checkTimeStampAndSender(timestamp , sender);
         /// received this msg and encode a proper response and handle actions
-        char c = response.charAt(0);
+        char c = msg.charAt(0);
+        String okay_msg= "3 okay";
         switch (c){
             case '0': /// if we receive 1
                 /// if we received new peer we send list of other peers
                 /// adding coordinator port and other ports including last which is the port the receiver will be listening to
                 this.addNewPeer();
                 this.notifyWithNewPeer();
-                return new String("4 " + this.getPort()+" "+ encodePeers());
+                String list_msg= new String("4 " + this.getPort()+" "+ encodePeers());
+                return encodeMessage(getNowTimeStamp() , list_msg);
 
             ///case '5' we received new peer respond with okay
             case '5':
-                notifiedWithNewPeer(response);
-                return new String("3 okay");
+                notifiedWithNewPeer(msg);
+                return encodeMessage(getNowTimeStamp() , okay_msg);
+//                return new String("3 okay");
             default:
-                return new String("3 okay");
+                return encodeMessage(getNowTimeStamp() , okay_msg);
+        }
+    }
+    void sendAlive(){
+        long lastSent = 0 ;
+        while(active){
+            if(getNowTimeStamp() - lastSent >= 2000){
+                for (int peer:peers) {
+                    lastSent = getNowTimeStamp();
+                    sendAndGetRespone(peer , encodeMessage(lastSent , "1 alive"),1000);
+                }
+            }
         }
     }
     String encodePeers(){
@@ -132,6 +170,19 @@ public class Peer {
         printPeers();
         return ;
     }
+    void notifyElection(){
+        // TODO: 12/1/2020
+        /// we are supposed to be having the list in ascending order so we find our index
+        /// then we notify all peers with higher priority (which is here with lower port number)//
+
+    }
+    void notifiedWithElection(String response){
+        // TODO: 12/1/2020
+        /// we get notified with an election message,
+        // if the port is lower than us we send ok
+        // otherwise we send election message
+
+    }
     boolean receiveAndGiveResponse(int timeOut){
         try{
             ServerSocket ss=new ServerSocket(this.getPort());
@@ -149,7 +200,11 @@ public class Peer {
             din.close();
             ss.close();
             return true;
-        }catch(Exception e){System.out.println(e);}
+        }catch(Exception e){
+            /// if we timed out, we send election
+            System.out.println(e);
+
+        }
         return false;
     }
 
@@ -162,19 +217,27 @@ public class Peer {
         }else {
             System.out.println("cannot connect to coordinator");
             /// i'm coordinator rn and ill add myself to list
+            AMA_COORDINATOR = true;
             Listen();
         }
     }
     void Listen(){
         System.out.println("I'm listening to " + this.getPort());
         while(active){
-           receiveAndGiveResponse(0); /// wait indefinitely
+            if(AMA_COORDINATOR){
+                receiveAndGiveResponse(0); /// wait indefinitely
+                sendAlive();
+            }else {
+
+                receiveAndGiveResponse(NO_RESPONSE_SPAN); /// wait 3 seconds
+            }
 
         }
     }
     boolean sendHeyToCoordinator(){
         /// we create a peer here because the default settings is it of coordinator
-        return sendAndGetRespone(8090,"0 hey",1000);
+        String msg = encodeMessage(getNowTimeStamp() ,"0 hey");
+        return sendAndGetRespone(8090,msg,1000);
     }
     public void setHost(String host) {
         this.host = host;
@@ -206,5 +269,34 @@ public class Peer {
         }
         System.out.println("");
 
+    }
+    long getNowTimeStamp(){
+        return new Timestamp(System.currentTimeMillis()).getTime();
+    }
+    String encodeMessage(long timeStamp,String message){
+        return timeStamp+","+ this.getPort() + ","+message;
+    }
+    long getTimeStampFromRepsonse(String response){
+        String temp[] = response.split(",");
+        long ret = Long.parseLong(temp[0]);
+        return ret;
+    }
+    int getSenderPortFromResponse(String response){
+        String temp[] = response.split(",");
+        return Integer.parseInt(temp[1]);
+    }
+    String getMessageFromResponse(String response){
+        String temp[] = response.split(",");
+        return temp[2];
+    }
+    Timestamp getTimeStamp(long timeInMillis){
+        return new Timestamp(timeInMillis);
+    }
+    public long getAliveTimeStamp() {
+        return AliveTimeStamp;
+    }
+
+    public void setAliveTimeStamp(long aliveTimeStamp) {
+        AliveTimeStamp = aliveTimeStamp;
     }
 }
