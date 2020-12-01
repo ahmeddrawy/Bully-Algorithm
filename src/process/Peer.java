@@ -234,11 +234,13 @@ public class Peer {
         System.out.println("I'm listening to " + this.getPort());
         while(active){
             if(AMA_COORDINATOR){
+                /// when timed out the socket is not closed so we don't need to open it again
                 if(serverSocket == null||serverSocket.isClosed())
                     bindServerSocket();
                 receiveAndGiveResponse(2000); ///listen for 2 second and send alive wait indefinitely
                 sendAlive();
             }else {
+                /// when timed out the socket is not closed so we don't need to open it again
                 if(serverSocket == null||serverSocket.isClosed())
                     bindServerSocket();
 
