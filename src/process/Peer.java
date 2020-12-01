@@ -27,7 +27,7 @@ public class Peer {
     private int port = 8090;
     private String host = "127.0.0.1"; /// default, all on local host
     private int defaultTimeOut = 1000;
-//    private ServerSocket serverSocket = null;
+    private ServerSocket serverSocket = null;
     List<Integer> peers = new ArrayList<>();
     private boolean active = true ;
     private boolean AMA_COORDINATOR = false ;
@@ -119,14 +119,14 @@ public class Peer {
     }
     void sendAlive(){
         long lastSent = 0 ;
-        while(active){
-            if(getNowTimeStamp() - lastSent >= 2000){
-                for (int peer:peers) {
-                    lastSent = getNowTimeStamp();
-                    sendAndGetRespone(peer , encodeMessage(lastSent , "1 alive"),1000);
-                }
+//        while(active){
+//            if(getNowTimeStamp() - lastSent >= 2000){
+            for (int peer:peers) {
+                lastSent = getNowTimeStamp();
+                sendAndGetRespone(peer , encodeMessage(lastSent , "1 alive"),1000);
             }
-        }
+//            }
+//        }
     }
     String encodePeers(){
         String ret = "";
@@ -159,7 +159,7 @@ public class Peer {
         /// don't notify last one he already got response
         /// last in list is the new peer
         for (int i = 0; i < peers.size()-1 ; i++) {
-            sendAndGetRespone(peers.get(i) ,"5 "+ peers.get(peers.size() -1 ),1000);
+            sendAndGetRespone(peers.get(i) ,encodeMessage(getNowTimeStamp() ,"5 " +peers.get(peers.size() -1 )) ,1000);
         }
 
     }
@@ -183,12 +183,21 @@ public class Peer {
         // otherwise we send election message
 
     }
+    boolean bindServerSocket(){
+        try {
+            serverSocket = new ServerSocket(this.getPort());
+            return true;
+        } catch (IOException e) {
+            e.printStackTrace();
+        }
+        return false;
+    }
     boolean receiveAndGiveResponse(int timeOut){
         try{
-            ServerSocket ss=new ServerSocket(this.getPort());
+//            ServerSocket ss=new ServerSocket(this.getPort());
             if(timeOut> 0)
-                ss.setSoTimeout(timeOut);
-            Socket s=ss.accept();//establishes connection
+                serverSocket.setSoTimeout(timeOut);
+            Socket s=serverSocket.accept();//establishes connection
             DataInputStream din=new DataInputStream(s.getInputStream());
             DataOutputStream dout=new DataOutputStream(s.getOutputStream());
             String str=din.readUTF();
@@ -198,7 +207,7 @@ public class Peer {
             dout.flush();
             dout.close();
             din.close();
-            ss.close();
+            serverSocket.close();
             return true;
         }catch(Exception e){
             /// if we timed out, we send election
@@ -225,9 +234,13 @@ public class Peer {
         System.out.println("I'm listening to " + this.getPort());
         while(active){
             if(AMA_COORDINATOR){
-                receiveAndGiveResponse(0); /// wait indefinitely
+                if(serverSocket == null||serverSocket.isClosed())
+                    bindServerSocket();
+                receiveAndGiveResponse(2000); ///listen for 2 second and send alive wait indefinitely
                 sendAlive();
             }else {
+                if(serverSocket == null||serverSocket.isClosed())
+                    bindServerSocket();
 
                 receiveAndGiveResponse(NO_RESPONSE_SPAN); /// wait 3 seconds
             }
@@ -237,7 +250,7 @@ public class Peer {
     boolean sendHeyToCoordinator(){
         /// we create a peer here because the default settings is it of coordinator
         String msg = encodeMessage(getNowTimeStamp() ,"0 hey");
-        return sendAndGetRespone(8090,msg,1000);
+        return sendAndGetRespone(8090,msg,4000); /// wait for 4 seconds
     }
     public void setHost(String host) {
         this.host = host;
